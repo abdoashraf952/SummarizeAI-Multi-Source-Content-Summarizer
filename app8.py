@@ -45,7 +45,7 @@ if st.button("Summarize"):
             if "youtube.com" in generic_url or "youtu.be" in generic_url:
 
                 # Try LangChain loader first
-                loader = YoutubeLoader.from_youtube_url(generic_url,language=["en","ar"])
+                loader = YoutubeLoader.from_youtube_url(generic_url,language=["en","ar"],cookies="youtube.com_cookies.txt")
                 docs = loader.load()
 
 
