@@ -1,29 +1,26 @@
-## C:\Users\abdoa\anaconda3\Scripts\activate C:\Users\abdoa\anaconda3\envs\Ai_agent
-
-
 import streamlit as st
-#from langchain_huggingface import HuggingFaceEndpoint
 from langchain_groq import ChatGroq
-from dotenv import load_dotenv
-import os
 from langchain_core.prompts import PromptTemplate
-from langchain_classic.chains.summarize import load_summarize_chain
-from langchain_community.document_loaders import YoutubeLoader, UnstructuredURLLoader
+from langchain_core.documents import Document
+from langchain.chains.summarize import load_summarize_chain
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
+import trafilatura
+import requests
+import re
+import os
+from dotenv import load_dotenv
 
 load_dotenv()
 
 # ================== LLM ==================
-#repo_id="google/gemma-2-9b"
-#llm=HuggingFaceEndpoint(repo_id=repo_id,max_new_tokens=150,temperature=0.7,huggingfacehub_api_token=os.getenv("HF_TOKEN"),task="text-generation")
-st.secrets["GROQ_API_KEY"]
-
-api_key = os.getenv("GROQ_API_KEY")
+api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 llm = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=api_key)
+
 # ================== UI ==================
 st.set_page_config(page_title="Summarizer", page_icon="🦜")
 st.title("🦜 URL & YouTube Summarizer")
 st.subheader("Summarize any URL or YouTube video")
-
 generic_url = st.text_input("Enter URL", label_visibility="collapsed")
 
 # ================== Prompt ==================
@@ -33,70 +30,101 @@ Content:{text}
 """
 prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
 
+# ================== Helper: Extract Video ID ==================
+def extract_video_id(url):
+    pattern = r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})"
+    match = re.search(pattern, url)
+    return match.group(1) if match else None
+
+# ================== Helper: Extract URL Content ==================
+def extract_url_content(url):
+    """Try multiple methods to extract content from a URL."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
+    # Method 1: trafilatura (best for article/blog content)
+    try:
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        response.raise_for_status()
+        text = trafilatura.extract(
+            response.text,
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False
+        )
+        if text and len(text.strip()) > 100:
+            return text.strip()
+    except Exception:
+        pass
+
+    # Method 2: trafilatura fetch directly
+    try:
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            text = trafilatura.extract(downloaded)
+            if text and len(text.strip()) > 100:
+                return text.strip()
+    except Exception:
+        pass
+
+    # Method 3: BeautifulSoup fallback
+    try:
+        from bs4 import BeautifulSoup
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        soup = BeautifulSoup(response.text, "html.parser")
+        # Remove script/style noise
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+        if text and len(text.strip()) > 100:
+            return text.strip()[:5000]  # cap length
+    except Exception:
+        pass
+
+    return None
+
 # ================== Main Logic ==================
 if st.button("Summarize"):
+    if not generic_url.strip():
+        st.warning("⚠️ Please enter a URL first.")
+    else:
+        try:
+            with st.spinner("Processing..."):
+                docs = []
 
-    try:
-        with st.spinner("Processing..."):
+                # ===== YouTube Case =====
+                if "youtube.com" in generic_url or "youtu.be" in generic_url:
+                    video_id = extract_video_id(generic_url)
+                    if not video_id:
+                        st.error("❌ Could not extract video ID from URL")
+                        st.stop()
 
-            docs = []
-
-            # ===== YouTube Case =====
-            if "youtube.com" in generic_url or "youtu.be" in generic_url:
-
-                # Try LangChain loader first
-                loader = YoutubeLoader.from_youtube_url(generic_url,language=["en","ar"])
-                docs = loader.load()
-
-
-            # ===== Website Case =====
-            # ===== Website Case =====
-            else:
-                try:
-                    loader = UnstructuredURLLoader(
-                        urls=[generic_url],
-                        ssl_verify=False,
-                        headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                        }
+                    proxy_config = WebshareProxyConfig(
+                        proxy_username=st.secrets["WEBSHARE_USER"],
+                        proxy_password=st.secrets["WEBSHARE_PASS"],
                     )
-                    docs = loader.load()
-                    
-                    # Check if we actually got text
-                    if not docs or len(docs[0].page_content.strip()) < 50:
-                        # Fallback for sites that block Unstructured
-                        st.info("🔄 Standard extraction failed. Trying fallback method...")
-                        import requests
-                        from bs4 import BeautifulSoup
-                        
-                        response = requests.get(generic_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-                        soup = BeautifulSoup(response.content, 'html.parser')
-                        
-                        # Remove script and style elements
-                        for script in soup(["script", "style"]):
-                            script.decompose()
-                            
-                        text = soup.get_text(separator=' ')
-                        # Clean up whitespace
-                        text = " ".join(text.split())
-                        
-                        from langchain.schema import Document
-                        docs = [Document(page_content=text)]
-                        
-                except Exception as e:
-                    st.error(f"❌ Extraction Error: {e}")
-                    st.stop()
+                    ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
+                    transcript = ytt.fetch(video_id, languages=["en", "ar"])
+                    text = " ".join([t.text for t in transcript])
+                    docs = [Document(page_content=text)]
 
-                if not docs or not docs[0].page_content.strip():
-                    st.error("❌ Could not extract content from this URL")
-                    st.stop()
+                # ===== Website Case =====
+                else:
+                    text = extract_url_content(generic_url)
+                    if not text:
+                        st.error("❌ Could not extract content from this URL. The site may block bots or require login.")
+                        st.stop()
+                    docs = [Document(page_content=text)]
 
-            # ================== Summarization ==================
-            chain = load_summarize_chain(llm, chain_type="stuff", prompt=prompt)
+                # ================== Summarization ==================
+                chain = load_summarize_chain(llm, chain_type="stuff", prompt=prompt)
+                output = chain.invoke(docs)
+                st.success(output["output_text"])
 
-            output = chain.invoke(docs)
-
-            st.success(output["output_text"])
-
-    except Exception as e:
-        st.exception(f"Error: {e}")
+        except Exception as e:
+            st.exception(f"Error: {e}")
