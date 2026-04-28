@@ -2,7 +2,7 @@ import streamlit as st
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
-from langchain_community.chains.summarize import load_summarize_chain
+from langchain_core.output_parsers import StrOutputParser
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import WebshareProxyConfig
 import trafilatura
@@ -30,6 +30,9 @@ Content:{text}
 """
 prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
 
+# ================== Chain (No load_summarize_chain needed) ==================
+chain = prompt | llm | StrOutputParser()
+
 # ================== Helper: Extract Video ID ==================
 def extract_video_id(url):
     pattern = r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})"
@@ -38,7 +41,6 @@ def extract_video_id(url):
 
 # ================== Helper: Extract URL Content ==================
 def extract_url_content(url):
-    """Try multiple methods to extract content from a URL."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -46,23 +48,16 @@ def extract_url_content(url):
             "Chrome/120.0.0.0 Safari/537.36"
         )
     }
-
-    # Method 1: trafilatura (best for article/blog content)
+    # Method 1: trafilatura via requests
     try:
         response = requests.get(url, headers=headers, timeout=15, verify=False)
-        response.raise_for_status()
-        text = trafilatura.extract(
-            response.text,
-            include_comments=False,
-            include_tables=True,
-            no_fallback=False
-        )
+        text = trafilatura.extract(response.text, include_tables=True, no_fallback=False)
         if text and len(text.strip()) > 100:
             return text.strip()
     except Exception:
         pass
 
-    # Method 2: trafilatura fetch directly
+    # Method 2: trafilatura direct fetch
     try:
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
@@ -77,12 +72,11 @@ def extract_url_content(url):
         from bs4 import BeautifulSoup
         response = requests.get(url, headers=headers, timeout=15, verify=False)
         soup = BeautifulSoup(response.text, "html.parser")
-        # Remove script/style noise
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
         text = soup.get_text(separator=" ", strip=True)
         if text and len(text.strip()) > 100:
-            return text.strip()[:5000]  # cap length
+            return text.strip()[:8000]
     except Exception:
         pass
 
@@ -95,7 +89,7 @@ if st.button("Summarize"):
     else:
         try:
             with st.spinner("Processing..."):
-                docs = []
+                text = ""
 
                 # ===== YouTube Case =====
                 if "youtube.com" in generic_url or "youtu.be" in generic_url:
@@ -111,20 +105,17 @@ if st.button("Summarize"):
                     ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
                     transcript = ytt.fetch(video_id, languages=["en", "ar"])
                     text = " ".join([t.text for t in transcript])
-                    docs = [Document(page_content=text)]
 
                 # ===== Website Case =====
                 else:
                     text = extract_url_content(generic_url)
                     if not text:
-                        st.error("❌ Could not extract content from this URL. The site may block bots or require login.")
+                        st.error("❌ Could not extract content. The site may block bots or require login.")
                         st.stop()
-                    docs = [Document(page_content=text)]
 
                 # ================== Summarization ==================
-                chain = load_summarize_chain(llm, chain_type="stuff", prompt=prompt)
-                output = chain.invoke(docs)
-                st.success(output["output_text"])
+                output = chain.invoke({"text": text})
+                st.success(output)
 
         except Exception as e:
             st.exception(f"Error: {e}")
