@@ -51,41 +51,41 @@ if st.button("Summarize"):
 
             # ===== Website Case =====
             # ===== Website Case =====
-else:
-    try:
-        loader = UnstructuredURLLoader(
-            urls=[generic_url],
-            ssl_verify=False,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-        )
-        docs = loader.load()
-        
-        # Check if we actually got text
-        if not docs or len(docs[0].page_content.strip()) < 50:
-            # Fallback for sites that block Unstructured
-            st.info("🔄 Standard extraction failed. Trying fallback method...")
-            import requests
-            from bs4 import BeautifulSoup
-            
-            response = requests.get(generic_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.decompose()
-                
-            text = soup.get_text(separator=' ')
-            # Clean up whitespace
-            text = " ".join(text.split())
-            
-            from langchain.schema import Document
-            docs = [Document(page_content=text)]
-            
-    except Exception as e:
-        st.error(f"❌ Extraction Error: {e}")
-        st.stop()
+            else:
+                try:
+                    loader = UnstructuredURLLoader(
+                        urls=[generic_url],
+                        ssl_verify=False,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        }
+                    )
+                    docs = loader.load()
+                    
+                    # Check if we actually got text
+                    if not docs or len(docs[0].page_content.strip()) < 50:
+                        # Fallback for sites that block Unstructured
+                        st.info("🔄 Standard extraction failed. Trying fallback method...")
+                        import requests
+                        from bs4 import BeautifulSoup
+                        
+                        response = requests.get(generic_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        
+                        # Remove script and style elements
+                        for script in soup(["script", "style"]):
+                            script.decompose()
+                            
+                        text = soup.get_text(separator=' ')
+                        # Clean up whitespace
+                        text = " ".join(text.split())
+                        
+                        from langchain.schema import Document
+                        docs = [Document(page_content=text)]
+                        
+                except Exception as e:
+                    st.error(f"❌ Extraction Error: {e}")
+                    st.stop()
 
                 if not docs or not docs[0].page_content.strip():
                     st.error("❌ Could not extract content from this URL")
